@@ -7,11 +7,13 @@ import fnmatch
 from pathlib import Path
 import base64
 
+# Optional requests for remote functionality
 try:
     import requests
 except ImportError:
     requests = None
 
+# - Paths / Config
 SVCS_DIR = ".svcs"
 OBJECTS = f"{SVCS_DIR}/objects"
 COMMITS = f"{SVCS_DIR}/commits"
@@ -21,6 +23,7 @@ HEAD = f"{SVCS_DIR}/HEAD"
 IGNORE_FILE = ".svcsignore"
 REMOTES = f"{SVCS_DIR}/remotes.json"
 
+# - Utils
 def die(msg, code=1):
     print(msg)
     sys.exit(code)
@@ -70,7 +73,7 @@ def commit_path(commit_id: str) -> str:
 def commit_exists(commit_id: str) -> bool:
     return os.path.exists(commit_path(commit_id))
 
-# Ignore handling
+# - Ignore handling
 def load_ignore():
     patterns = []
     if os.path.exists(IGNORE_FILE):
@@ -105,7 +108,9 @@ def get_all_files():
             files.append(path)
     return files
 
+# ----------------
 # Core SVCS ops
+# ----------------
 def init():
     os.makedirs(OBJECTS, exist_ok=True)
     os.makedirs(COMMITS, exist_ok=True)
@@ -115,7 +120,7 @@ def init():
     with open(HEAD, "w") as f:
         f.write("main")
     set_branch_head("main", "")
-    print("SVCS repo initialized!")
+    print("SVCS repo initialized! Time to make history, literally.")
 
 def add(target):
     ensure_repo()
@@ -165,14 +170,178 @@ def commit(message):
         "timestamp": time.time(),
         "files": index,
         "parent": parent,
-        "branch": branch
+        "branch": branch,
     }
 
     write_json(commit_path(commit_id), commit_data)
     set_branch_head(branch, commit_id)
-    print(f"commit {commit_id} - {message}")
+    print(f"commit {commit_id} - {message} (yes, you made history)")
 
-# Remotes now store url+repo
+# ----------------
+# Local commands
+# ----------------
+def log():
+    ensure_repo()
+    branch = current_branch()
+    commit_id = branch_head(branch)
+    if not commit_id:
+        print("(no commits yet)")
+        return
+
+    while commit_id:
+        data = read_json(commit_path(commit_id))
+        if not data or "message" not in data:
+            print(f"(commit data missing for {commit_id})")
+            return
+        print(f"commit {commit_id}")
+        print(f"message: {data['message']}")
+        print()
+        commit_id = data.get("parent")
+
+def timeline():
+    ensure_repo()
+    branch_name = current_branch()
+    commit_id = branch_head(branch_name)
+    if not commit_id:
+        print("(no commits yet)")
+        return
+
+    while commit_id:
+        data = read_json(commit_path(commit_id))
+        if not data or "message" not in data:
+            print(f"(commit data missing for {commit_id})")
+            return
+        print(f"* {commit_id} ({data.get('branch', '?')})")
+        print(f"| {data['message']}")
+        print("|")
+        commit_id = data.get("parent")
+
+def status():
+    ensure_repo()
+    index = read_json(INDEX)
+    changed = []
+    staged = list(index.keys())
+    all_files = get_all_files()
+
+    for f in all_files:
+        try:
+            with open(f, "rb") as file:
+                h = sha1(file.read())
+        except OSError:
+            continue
+
+        if f in index:
+            if h != index[f]:
+                changed.append(f)
+        else:
+            changed.append(f)
+
+    print("- Staged files:")
+    for f in staged:
+        print(f"  {f}")
+
+    print("- Modified / unstaged files:")
+    for f in changed:
+        if f not in staged:
+            print(f"  {f}")
+
+def diff():
+    ensure_repo()
+    index = read_json(INDEX)
+    if not index:
+        print("(nothing staged)")
+        return
+
+    for file, h in index.items():
+        obj_path = f"{OBJECTS}/{h}"
+        if not os.path.exists(obj_path):
+            continue
+        if not os.path.exists(file):
+            print(f"diff for {file}: (file missing in working directory)")
+            continue
+
+        with open(file, "r", errors="ignore") as f1, open(obj_path, "r", errors="ignore") as f2:
+            cur = f1.readlines()
+            old = f2.readlines()
+            if cur != old:
+                print(f"diff for {file}:")
+                for l1, l2 in zip(old, cur):
+                    if l1 != l2:
+                        print(f"- {l1.strip()} -> {l2.strip()}")
+                if len(cur) > len(old):
+                    for l in cur[len(old):]:
+                        print(f"- added: {l.strip()}")
+                elif len(old) > len(cur):
+                    for l in old[len(cur):]:
+                        print(f"- removed: {l.strip()}")
+
+def branch(name):
+    ensure_repo()
+    if not name:
+        die("usage: svcs branch <name>", 2)
+
+    cur = current_branch()
+    commit_id = branch_head(cur) or ""
+    set_branch_head(name, commit_id)
+    print(f"branch {name} created at {commit_id} (you fancy now)")
+
+def checkout(target):
+    ensure_repo()
+    if not target:
+        die("usage: svcs checkout <branch|commit>", 2)
+
+    branch_path = f"{BRANCHES}/{target}"
+    if os.path.exists(branch_path):
+        with open(HEAD, "w") as f:
+            f.write(target)
+        commit_id = branch_head(target)
+        if commit_id:
+            restore_commit(commit_id)
+        print(f"Switched to branch {target}")
+        return
+
+    if not commit_exists(target):
+        die(f"unknown branch or commit: {target}", 1)
+
+    restore_commit(target)
+    print(f"Checked out commit {target}")
+
+def restore_commit(commit_id):
+    if not commit_id:
+        return
+
+    path = commit_path(commit_id)
+    if not os.path.exists(path):
+        die(f"commit not found: {commit_id}", 1)
+
+    data = read_json(path)
+    if not data or "files" not in data:
+        die(f"commit data invalid: {commit_id}", 1)
+
+    for file_path, obj in data["files"].items():
+        obj_file = f"{OBJECTS}/{obj}"
+        if not os.path.exists(obj_file):
+            die(f"object missing for {file_path}: {obj}", 1)
+
+        with open(obj_file, "rb") as f:
+            content = f.read()
+
+        Path(os.path.dirname(file_path) or ".").mkdir(parents=True, exist_ok=True)
+        with open(file_path, "wb") as f:
+            f.write(content)
+
+def info():
+    print(
+        "===================================\n"
+        "Simple Version System - SVCS\n"
+        "Copyright (C) 2026 Dominik Hupfauer\n"
+        "Version 2.1.0\n"
+        "=====================================\n"
+    )
+
+# ----------------
+# Remote commands
+# ----------------
 def remote_add(name, url, repo):
     ensure_repo()
     if not name or not url or not repo:
@@ -216,7 +385,6 @@ def _gather_reachable_objects_and_commits(commit_id):
     return objects_to_send, commits_to_send
 
 def _build_working_tree_snapshot():
-    # Upload all non-ignored files from working dir (NOT .svcs)
     snapshot = {}
     for path in get_all_files():
         if not os.path.exists(path) or not os.path.isfile(path):
@@ -226,9 +394,7 @@ def _build_working_tree_snapshot():
     return snapshot
 
 def _write_working_tree_snapshot(snapshot):
-    # Write files to working directory (respecting paths)
     for relpath, b64 in snapshot.items():
-        # Safety: never write into .svcs from snapshot
         if relpath.startswith(".svcs/") or relpath == ".svcs":
             continue
         data = base64.b64decode(b64)
@@ -241,27 +407,25 @@ def push(remote_name, branch_name=None, auto_create=True):
     ensure_requests()
 
     remote = _get_remote(remote_name)
-    branch = branch_name or current_branch()
-    commit_id = branch_head(branch)
+    branch_name = branch_name or current_branch()
+    commit_id = branch_head(branch_name)
     if not commit_id:
-        die(f"branch {branch} has no commits to push")
+        die(f"branch {branch_name} has no commits to push")
 
     objects_to_send, commits_to_send = _gather_reachable_objects_and_commits(commit_id)
-
-    # NEW: include working tree snapshot (everything not ignored by .svcsignore)
     working_tree = _build_working_tree_snapshot()
 
     payload = {
         "objects": objects_to_send,
         "commits": commits_to_send,
-        "branches": {branch: commit_id},
+        "branches": {branch_name: commit_id},
         "working_tree": working_tree,
         "snapshot_commit": commit_id,
     }
 
     r = requests.post(f"{remote['url']}/push/{remote['repo']}", json=payload)
     if r.status_code == 200:
-        print(f"pushed {branch} -> {remote_name}/{remote['repo']} (including working tree)")
+        print(f"pushed {branch_name} -> {remote_name}/{remote['repo']} (including working tree)")
         return
 
     if r.status_code == 404 and auto_create:
@@ -270,14 +434,14 @@ def push(remote_name, branch_name=None, auto_create=True):
             die(f"push failed: remote create failed ({c.status_code}): {c.text}")
         r2 = requests.post(f"{remote['url']}/push/{remote['repo']}", json=payload)
         if r2.status_code == 200:
-            print(f"pushed {branch} -> {remote_name}/{remote['repo']} (after create, including working tree)")
+            print(f"pushed {branch_name} -> {remote_name}/{remote['repo']} (after create, including working tree)")
             return
         die(f"push failed after create ({r2.status_code}): {r2.text}")
 
     die(f"push failed ({r.status_code}): {r.text}")
 
 def pull(remote_name):
-    # IMPORTANT: pull only updates .svcs (objects/commits/branches); does NOT touch working files.
+    # Pull ONLY syncs the .svcs database portion.
     ensure_repo()
     ensure_requests()
 
@@ -305,7 +469,6 @@ def pull(remote_name):
     print(f"pulled .svcs data from {remote_name}/{remote['repo']}")
 
 def clone(url, repo, folder, branch="main"):
-    # Clone pulls .svcs + full working tree snapshot
     ensure_requests()
     if os.path.exists(folder):
         die(f"folder {folder} already exists")
@@ -315,17 +478,13 @@ def clone(url, repo, folder, branch="main"):
 
     init()
     remote_add("origin", url, repo)
-
-    # pull only .svcs db
     pull("origin")
 
-    # find commit to snapshot (branch head)
     head_commit = branch_head(branch)
     if not head_commit:
         print("clone: remote has no commits yet; cloned empty repo")
         return
 
-    # fetch snapshot for that commit and write files
     remote_cfg = _get_remote("origin")
     r = requests.get(f"{remote_cfg['url']}/snapshot/{remote_cfg['repo']}/{head_commit}")
     if r.status_code != 200:
@@ -335,13 +494,22 @@ def clone(url, repo, folder, branch="main"):
     _write_working_tree_snapshot(snapshot)
     print(f"cloned {url} (repo={repo}) into {folder} at {branch}@{head_commit}")
 
+# - CLI
 def usage():
     print(
         "svcs <command>\n\n"
-        "commands:\n"
+        "local commands:\n"
         "  init\n"
         "  add <file|.>\n"
         "  commit <message>\n"
+        "  log\n"
+        "  status\n"
+        "  diff\n"
+        "  branch <name>\n"
+        "  checkout <branch|commit>\n"
+        "  timeline\n"
+        "  info\n"
+        "\nremote commands:\n"
         "  remote add <name> <url> <repo>\n"
         "  push <remote> [branch]\n"
         "  pull <remote>\n"
@@ -362,6 +530,20 @@ def main():
         add(args[0] if args else None)
     elif cmd == "commit":
         commit(args[0] if args else None)
+    elif cmd == "log":
+        log()
+    elif cmd == "status":
+        status()
+    elif cmd == "diff":
+        diff()
+    elif cmd == "branch":
+        branch(args[0] if args else None)
+    elif cmd == "checkout":
+        checkout(args[0] if args else None)
+    elif cmd == "timeline":
+        timeline()
+    elif cmd == "info":
+        info()
     elif cmd == "remote":
         if len(args) < 1 or args[0] != "add" or len(args) != 4:
             die("usage: svcs remote add <name> <url> <repo>", 2)
@@ -379,7 +561,7 @@ def main():
             die("usage: svcs clone <url> <repo> <folder>", 2)
         clone(args[0], args[1], args[2])
     else:
-        die("unknown command", 2)
+        die("unknown command. Run `svcs` with no args to see usage.", 2)
 
 if __name__ == "__main__":
     main()
