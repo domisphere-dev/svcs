@@ -1,23 +1,35 @@
-# SVCS (Client) — Simple Version Control System
+# SVCS - The Simple Version Control System
 
-SVCS is a small, educational version control tool written in Python.  
-This repository focuses on the **client CLI** (`svcs.py`) that tracks file history locally in a `.svcs/` folder.
+this is a **really dumb** project i made out of pure boredom. like *literally*.
 
-> SVCS is a learning project, not a production-ready VCS.
+i wanted a tiny version control thing that kinda smells like git, but also definitely isn’t git (because i value my sanity and also i wrote this in python).
+
+## What is this?
+
+**svcs** = “simple version control system” (or “severely questionable coding session”, both are accurate).
+
+you get a little cli (`svcs.py`) that tracks file history locally inside a `.svcs/` folder.
+
+- is it production ready? **no.**
+- is it educational? **yeah, i guess.**
+- will it eat your files? **probably not.** (but i’m not making promises)
+
+> tl;dr: it’s a learning/toy vcs. if you use this for real work… that’s on you.
 
 ---
 
 ## Requirements
 
-- Python **3.9+**
+- python **3.9+**
+- an adventurous spirit
 
-No external dependencies are required for local-only usage.
+no external deps. just vibes.
 
 ---
 
 ## Installation
 
-Clone the repository and run the CLI directly:
+clone it and run it:
 
 ```bash
 git clone <your-repo-url>
@@ -27,45 +39,46 @@ python3 svcs.py
 
 ---
 
-## Commands
+## Commands (aka “the buttons i managed to wire up”)
 
 ### `init`
-Initialize a new SVCS repository in the current folder.
+make a new svcs repo in the current folder.
 
 ```bash
 python3 svcs.py init
 ```
 
-Creates:
+creates:
 
-- `.svcs/objects/` — stored file contents, addressed by SHA-1
-- `.svcs/commits/` — commit JSON files
-- `.svcs/branches/` — branch pointers (files named by branch)
+- `.svcs/objects/` — stored file contents (sha-1 addressed, because i’m fancy)
+- `.svcs/commits/` — commit json files
+- `.svcs/branches/` — branch pointers
 - `.svcs/index.json` — staging index
 - `.svcs/HEAD` — current branch name
 
 ---
 
-### `add <file|.>`
-Stage a file (or all files) for the next commit.
+### `add <file|.`
+stage one file or everything.
 
 ```bash
 python3 svcs.py add main.py
 python3 svcs.py add .
 ```
 
-`add .` walks the directory tree recursively and respects `.svcsignore`.
+`add .` walks folders recursively and respects `.svcsignore`.
 
 ---
 
 ### `commit <message>`
-Create a commit from the staged index.
+commit what’s staged.
 
 ```bash
 python3 svcs.py commit "initial commit"
 ```
 
-Commits store:
+commits store:
+
 - message
 - timestamp
 - mapping of tracked paths → content hashes
@@ -75,7 +88,7 @@ Commits store:
 ---
 
 ### `log`
-Show commit history of the current branch.
+show commit history.
 
 ```bash
 python3 svcs.py log
@@ -84,7 +97,7 @@ python3 svcs.py log
 ---
 
 ### `status`
-Show staged files and modified/unstaged files.
+show staged + modified/unstaged files.
 
 ```bash
 python3 svcs.py status
@@ -93,7 +106,7 @@ python3 svcs.py status
 ---
 
 ### `diff`
-Show line-level differences between staged content and the working directory.
+show line-level diffs between staged and working dir.
 
 ```bash
 python3 svcs.py diff
@@ -102,7 +115,7 @@ python3 svcs.py diff
 ---
 
 ### `branch <name>`
-Create a new branch pointer at the current commit.
+create a branch pointer.
 
 ```bash
 python3 svcs.py branch feature-x
@@ -111,7 +124,7 @@ python3 svcs.py branch feature-x
 ---
 
 ### `checkout <branch|commit>`
-Switch to a branch or restore a specific commit.
+switch branches or restore a commit.
 
 ```bash
 python3 svcs.py checkout feature-x
@@ -121,7 +134,7 @@ python3 svcs.py checkout a1b2c3d
 ---
 
 ### `timeline`
-Print a simple ASCII commit timeline.
+print a tiny ascii commit timeline.
 
 ```bash
 python3 svcs.py timeline
@@ -130,7 +143,7 @@ python3 svcs.py timeline
 ---
 
 ### `info`
-Print SVCS version/info.
+print version/info.
 
 ```bash
 python3 svcs.py info
@@ -140,9 +153,9 @@ python3 svcs.py info
 
 ## Ignoring files: `.svcsignore`
 
-Create a `.svcsignore` file in your repo root to prevent files/folders from being tracked.
+make a `.svcsignore` file in the repo root to stop stuff from being tracked.
 
-Example:
+example:
 
 ```gitignore
 *.log
@@ -153,11 +166,11 @@ node_modules/
 .venv/
 ```
 
-`.svcs/` is always ignored automatically.
+`.svcs/` is always ignored automatically (because i’m not a monster).
 
 ---
 
-## Typical workflow
+## Typical Workflow (how i expected this to be used at 2am)
 
 ```bash
 python3 svcs.py init
@@ -174,11 +187,11 @@ python3 svcs.py log
 
 ---
 
-## Notes / Limitations
+## Notes / Limitations (aka “things i didn’t implement”)
 
-- SVCS is intentionally minimal (no merge, no rebase, no conflict resolution).
-- Commit IDs are short SHA-1-derived identifiers and are not guaranteed collision-free in large repos.
-- This tool is meant for learning and small experiments.
+- no merge, no rebase, no conflict resolution.
+- commit ids are short sha-1-derived identifiers (collisions *should* be rare… probably).
+- this is meant for learning and small experiments.
 
 ---
 
