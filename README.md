@@ -187,6 +187,68 @@ python3 svcs.py log
 
 ---
 
+## Remote stuff (yes, somehow)
+
+ok so… turns out there’s "remote" features in here. not *git* remotes. more like "i duct-taped HTTP onto my toy vcs" remotes.
+
+### a few important things before you get excited:
+
+- this repo is **only the client** (`svcs.py`). you need a **compatible server** that speaks SVCS over HTTP.
+- the client expects these endpoints to exist on the server:
+  - `POST /create/<repo>`
+  - `POST /push/<repo>`
+  - `GET  /pull/<repo>`
+  - `GET  /snapshot/<repo>/<commit>`
+
+### the one dependency i couldn’t avoid
+
+remote stuff uses `requests`. if you don’t have it, svcs will yell at you (fair).
+
+```bash
+pip install requests
+```
+
+### `remote add <name> <url> <repo>`
+
+adds a remote to `.svcs/remotes.json`.
+
+```bash
+python3 svcs.py remote add origin http://localhost:8000 my-repo
+```
+
+### `push <remote> [branch]`
+
+pushes commits + objects **and** (this is the chaotic part) a full **working tree snapshot** of your current files.
+
+- default branch is whatever you’re on
+- if the server returns `404`, svcs will try to auto-create the repo by calling `POST /create/<repo>` and then push again
+
+```bash
+python3 svcs.py push origin
+python3 svcs.py push origin main
+```
+
+### `pull <remote>`
+
+pulls **only the `.svcs` database** (objects/commits/branch heads). it does **not** rewrite your working directory.
+
+aka: it updates your "history" but doesn’t touch your "mess".
+
+```bash
+python3 svcs.py pull origin
+```
+
+### `clone <url> <repo> <folder>`
+
+makes a new folder, initializes svcs inside it, sets `origin`, pulls the `.svcs` data, then fetches a snapshot for the current head commit and writes it into the working tree.
+
+```bash
+python3 svcs.py clone http://localhost:5000 my-repo ./my-repo
+```
+
+---
+
+
 ## Notes / Limitations (aka “things i didn’t implement”)
 
 - no merge, no rebase, no conflict resolution.
