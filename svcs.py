@@ -335,7 +335,7 @@ def info():
         "===================================\n"
         "Simple Version System - SVCS\n"
         "Copyright (C) 2026 Dominik Hupfauer\n"
-        "Version 2.1.0\n"
+        "Version 1.1.0.0\n"
         "=====================================\n"
     )
 
