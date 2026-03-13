@@ -21,6 +21,7 @@ BRANCHES = f"{SVCS_DIR}/branches"
 INDEX = f"{SVCS_DIR}/index.json"
 HEAD = f"{SVCS_DIR}/HEAD"
 IGNORE_FILE = ".svcsignore"
+REMOTES_TOKEN_FILE = f"{SVCS_DIR}/remotes-token.json"
 REMOTES = f"{SVCS_DIR}/remotes.json"
 
 # - Utils
@@ -345,7 +346,7 @@ def info():
 def remote_add(name, url, repo):
     ensure_repo()
     if not name or not url or not repo:
-        die("usage: svcs remote add <name> <url> <repo>", 2)
+        die("usage: svcs remote add <name> <remote-server-url> <repo>", 2)
 
     remotes = read_json(REMOTES)
     remotes[name] = {"url": normalize_base_url(url), "repo": repo}
@@ -358,7 +359,7 @@ def _get_remote(remote_name):
         die(f"remote {remote_name} not found")
     remote = remotes[remote_name]
     if not isinstance(remote, dict) or "url" not in remote or "repo" not in remote:
-        die(f"remote {remote_name} invalid. Re-add it with: svcs remote add {remote_name} <url> <repo>")
+        die(f"remote {remote_name} invalid. Re-add it with: svcs remote add {remote_name} <remote-server-url> <repo>")
     return remote
 
 def _gather_reachable_objects_and_commits(commit_id):
@@ -510,10 +511,11 @@ def usage():
         "  timeline\n"
         "  info\n"
         "\nremote commands:\n"
-        "  remote add <name> <url> <repo>\n"
+        "  remote add <name> <remote-server-url> <repo>\n"
         "  push <remote> [branch]\n"
         "  pull <remote>\n"
-        "  clone <url> <repo> <folder>\n"
+        "  clone <remote-server-url> <repo> <folder>\n"
+        "  login <remote-server-url> <username> <password>\n"
     )
 
 def main():
@@ -546,7 +548,7 @@ def main():
         info()
     elif cmd == "remote":
         if len(args) < 1 or args[0] != "add" or len(args) != 4:
-            die("usage: svcs remote add <name> <url> <repo>", 2)
+            die("usage: svcs remote add <name> <remote-server-url> <repo>", 2)
         remote_add(args[1], args[2], args[3])
     elif cmd == "push":
         if len(args) < 1:
@@ -558,8 +560,12 @@ def main():
         pull(args[0])
     elif cmd == "clone":
         if len(args) != 3:
-            die("usage: svcs clone <url> <repo> <folder>", 2)
+            die("usage: svcs clone <remote-server-url> <repo> <folder>", 2)
         clone(args[0], args[1], args[2])
+    elif cmd == "login":
+        if len(args) != 3:
+            die("usage: svcs login <remote-server-url> <username> <password>")
+        print("Work in Progress! (i need to figure out how to actualy implement this in a \"secure\" way...)")
     else:
         die("unknown command. Run `svcs` with no args to see usage.", 2)
 

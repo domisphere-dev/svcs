@@ -58,7 +58,7 @@ creates:
 
 ---
 
-### `add <file|.`
+### `add <file|.>`
 stage one file or everything.
 
 ```bash
@@ -208,7 +208,7 @@ remote stuff uses `requests`. if you don’t have it, svcs will yell at you (fai
 pip install requests
 ```
 
-### `remote add <name> <url> <repo>`
+### `remote add <name> <remote-server-url> <repo>`
 
 adds a remote to `.svcs/remotes.json`.
 
@@ -238,7 +238,7 @@ aka: it updates your "history" but doesn’t touch your "mess".
 python3 svcs.py pull origin
 ```
 
-### `clone <url> <repo> <folder>`
+### `clone <remote-server-url> <repo> <folder>`
 
 makes a new folder, initializes svcs inside it, sets `origin`, pulls the `.svcs` data, then fetches a snapshot for the current head commit and writes it into the working tree.
 
