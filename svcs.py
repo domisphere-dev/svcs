@@ -17,7 +17,7 @@ except ImportError:
 SVCS_DIR = ".svcs"
 OBJECTS = f"{SVCS_DIR}/objects"
 COMMITS = f"{SVCS_DIR}/commits"
-BRANCHES = f"{SVCS_DIR}/branches"
+TWIGS = f"{SVCS_DIR}/twigs"
 INDEX = f"{SVCS_DIR}/index.json"
 HEAD = f"{SVCS_DIR}/HEAD"
 IGNORE_FILE = ".svcsignore"
@@ -53,19 +53,19 @@ def write_json(path, data):
     with open(path, "w") as f:
         json.dump(data, f, indent=2)
 
-def current_branch():
+def current_twig():
     with open(HEAD) as f:
         return f.read().strip()
 
-def branch_head(branch):
-    path = f"{BRANCHES}/{branch}"
+def twig_head(twig):
+    path = f"{TWIGS}/{twig}"
     if not os.path.exists(path):
         return None
     with open(path) as f:
         return f.read().strip()
 
-def set_branch_head(branch, commit):
-    with open(f"{BRANCHES}/{branch}", "w") as f:
+def set_twig_head(twig, commit):
+    with open(f"{TWIGS}/{twig}", "w") as f:
         f.write(commit)
 
 def commit_path(commit_id: str) -> str:
@@ -115,12 +115,12 @@ def get_all_files():
 def init():
     os.makedirs(OBJECTS, exist_ok=True)
     os.makedirs(COMMITS, exist_ok=True)
-    os.makedirs(BRANCHES, exist_ok=True)
+    os.makedirs(TWIGS, exist_ok=True)
     write_json(INDEX, {})
     write_json(REMOTES, {})
     with open(HEAD, "w") as f:
         f.write("main")
-    set_branch_head("main", "")
+    set_twig_head("main", "")
     print("SVCS repo initialized! Time to make history, literally.")
 
 def add(target):
@@ -160,8 +160,8 @@ def commit(message):
     if not index:
         die("nothing to commit (index is empty). Run svcs add ... first.", 1)
 
-    branch = current_branch()
-    parent = branch_head(branch)
+    twig = current_twig()
+    parent = twig_head(twig)
 
     payload = json.dumps(index, sort_keys=True).encode()
     commit_id = sha1(payload + str(time.time()).encode())[:7]
@@ -171,11 +171,11 @@ def commit(message):
         "timestamp": time.time(),
         "files": index,
         "parent": parent,
-        "branch": branch,
+        "twig": twig,
     }
 
     write_json(commit_path(commit_id), commit_data)
-    set_branch_head(branch, commit_id)
+    set_twig_head(twig, commit_id)
     print(f"commit {commit_id} - {message} (yes, you made history)")
 
 # ----------------
@@ -183,8 +183,8 @@ def commit(message):
 # ----------------
 def log():
     ensure_repo()
-    branch = current_branch()
-    commit_id = branch_head(branch)
+    twig = current_twig()
+    commit_id = twig_head(twig)
     if not commit_id:
         print("(no commits yet)")
         return
@@ -201,8 +201,8 @@ def log():
 
 def timeline():
     ensure_repo()
-    branch_name = current_branch()
-    commit_id = branch_head(branch_name)
+    twig_name = current_twig()
+    commit_id = twig_head(twig_name)
     if not commit_id:
         print("(no commits yet)")
         return
@@ -212,7 +212,7 @@ def timeline():
         if not data or "message" not in data:
             print(f"(commit data missing for {commit_id})")
             return
-        print(f"* {commit_id} ({data.get('branch', '?')})")
+        print(f"* {commit_id} ({data.get('twig', '?')})")
         print(f"| {data['message']}")
         print("|")
         commit_id = data.get("parent")
@@ -276,33 +276,33 @@ def diff():
                     for l in old[len(cur):]:
                         print(f"- removed: {l.strip()}")
 
-def branch(name):
+def twig(name):
     ensure_repo()
     if not name:
-        die("usage: svcs branch <name>", 2)
+        die("usage: svcs twig <name>", 2)
 
-    cur = current_branch()
-    commit_id = branch_head(cur) or ""
-    set_branch_head(name, commit_id)
-    print(f"branch {name} created at {commit_id} (you fancy now)")
+    cur = current_twig()
+    commit_id = twig_head(cur) or ""
+    set_twig_head(name, commit_id)
+    print(f"twig {name} created at {commit_id} (you fancy now)")
 
 def checkout(target):
     ensure_repo()
     if not target:
-        die("usage: svcs checkout <branch|commit>", 2)
+        die("usage: svcs checkout <twig|commit>", 2)
 
-    branch_path = f"{BRANCHES}/{target}"
-    if os.path.exists(branch_path):
+    twig_path = f"{TWIGS}/{target}"
+    if os.path.exists(twig_path):
         with open(HEAD, "w") as f:
             f.write(target)
-        commit_id = branch_head(target)
+        commit_id = twig_head(target)
         if commit_id:
             restore_commit(commit_id)
-        print(f"Switched to branch {target}")
+        print(f"Switched to twig {target}")
         return
 
     if not commit_exists(target):
-        die(f"unknown branch or commit: {target}", 1)
+        die(f"unknown twig or commit: {target}", 1)
 
     restore_commit(target)
     print(f"Checked out commit {target}")
@@ -403,15 +403,15 @@ def _write_working_tree_snapshot(snapshot):
         with open(relpath, "wb") as f:
             f.write(data)
 
-def push(remote_name, branch_name=None, auto_create=True):
+def push(remote_name, twig_name=None, auto_create=True):
     ensure_repo()
     ensure_requests()
 
     remote = _get_remote(remote_name)
-    branch_name = branch_name or current_branch()
-    commit_id = branch_head(branch_name)
+    twig_name = twig_name or current_twig()
+    commit_id = twig_head(twig_name)
     if not commit_id:
-        die(f"branch {branch_name} has no commits to push")
+        die(f"twig {twig_name} has no commits to push")
 
     objects_to_send, commits_to_send = _gather_reachable_objects_and_commits(commit_id)
     working_tree = _build_working_tree_snapshot()
@@ -419,14 +419,14 @@ def push(remote_name, branch_name=None, auto_create=True):
     payload = {
         "objects": objects_to_send,
         "commits": commits_to_send,
-        "branches": {branch_name: commit_id},
+        "twigs": {twig_name: commit_id},
         "working_tree": working_tree,
         "snapshot_commit": commit_id,
     }
 
     r = requests.post(f"{remote['url']}/push/{remote['repo']}", json=payload)
     if r.status_code == 200:
-        print(f"pushed {branch_name} -> {remote_name}/{remote['repo']} (including working tree)")
+        print(f"pushed {twig_name} -> {remote_name}/{remote['repo']} (including working tree)")
         return
 
     if r.status_code == 404 and auto_create:
@@ -435,7 +435,7 @@ def push(remote_name, branch_name=None, auto_create=True):
             die(f"push failed: remote create failed ({c.status_code}): {c.text}")
         r2 = requests.post(f"{remote['url']}/push/{remote['repo']}", json=payload)
         if r2.status_code == 200:
-            print(f"pushed {branch_name} -> {remote_name}/{remote['repo']} (after create, including working tree)")
+            print(f"pushed {twig_name} -> {remote_name}/{remote['repo']} (after create, including working tree)")
             return
         die(f"push failed after create ({r2.status_code}): {r2.text}")
 
@@ -464,12 +464,12 @@ def pull(remote_name):
         if not os.path.exists(path):
             write_json(path, commit_data)
 
-    for br, head in data.get("branches", {}).items():
-        set_branch_head(br, head)
+    for tg, head in data.get("twigs", {}).items():
+        set_twig_head(tg, head)
 
     print(f"pulled .svcs data from {remote_name}/{remote['repo']}")
 
-def clone(url, repo, folder, branch="main"):
+def clone(url, repo, folder, twig="main"):
     ensure_requests()
     if os.path.exists(folder):
         die(f"folder {folder} already exists")
@@ -481,7 +481,7 @@ def clone(url, repo, folder, branch="main"):
     remote_add("origin", url, repo)
     pull("origin")
 
-    head_commit = branch_head(branch)
+    head_commit = twig_head(twig)
     if not head_commit:
         print("clone: remote has no commits yet; cloned empty repo")
         return
@@ -493,7 +493,7 @@ def clone(url, repo, folder, branch="main"):
 
     snapshot = r.json()
     _write_working_tree_snapshot(snapshot)
-    print(f"cloned {url} (repo={repo}) into {folder} at {branch}@{head_commit}")
+    print(f"cloned {url} (repo={repo}) into {folder} at {twig}@{head_commit}")
 
 # - CLI
 def usage():
@@ -506,13 +506,13 @@ def usage():
         "  log\n"
         "  status\n"
         "  diff\n"
-        "  branch <name>\n"
-        "  checkout <branch|commit>\n"
+        "  twig <name>\n"
+        "  checkout <twig|commit>\n"
         "  timeline\n"
         "  info\n"
         "\nremote commands:\n"
         "  remote add <name> <remote-server-url> <repo>\n"
-        "  push <remote> [branch]\n"
+        "  push <remote> [twig]\n"
         "  pull <remote>\n"
         "  clone <remote-server-url> <repo> <folder>\n"
         "  login <remote-server-url> <username> <password>\n"
@@ -538,8 +538,8 @@ def main():
         status()
     elif cmd == "diff":
         diff()
-    elif cmd == "branch":
-        branch(args[0] if args else None)
+    elif cmd == "twig":
+        twig(args[0] if args else None)
     elif cmd == "checkout":
         checkout(args[0] if args else None)
     elif cmd == "timeline":
@@ -552,7 +552,7 @@ def main():
         remote_add(args[1], args[2], args[3])
     elif cmd == "push":
         if len(args) < 1:
-            die("usage: svcs push <remote> [branch]", 2)
+            die("usage: svcs push <remote> [twig]", 2)
         push(args[0], args[1] if len(args) > 1 else None)
     elif cmd == "pull":
         if len(args) != 1:
