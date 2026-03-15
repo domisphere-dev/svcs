@@ -203,66 +203,114 @@ python3 svcs.py log
 
 ---
 
-## Remote stuff (yes, somehow)
+## Remote stuff (yes, somehow) - now with login™
 
 ok so... turns out there's "remote" features in here. not *git* remotes. more like "i duct-taped HTTP onto my toy vcs" remotes.
 
-### a few important things before you get excited:
-
+### before you continue:
 - this repo is **only the client** (`svcs.py`). you need a **compatible server** that speaks SVCS over HTTP.
-- the client expects these endpoints to exist on the server:
-  - `POST /create/<repo>`
-  - `POST /push/<repo>`
-  - `GET  /pull/<repo>`
-  - `GET  /snapshot/<repo>/<commit>`
+- the server is now **per-user scoped**:
+  - your repos live on the server under: `repos/<username>/<repo>/`
+  - you don’t push to some global bucket anymore. you push to *your* bucket. congratulations, you have a namespace.
 
-### the one dependency i couldn't avoid
-
+### the one dependency i couldn't avoid (still)
 remote stuff uses `requests`. if you don't have it, svcs will yell at you (fair).
 
 ```bash
 pip install requests
 ```
 
-### `remote add <name> <remote-server-url> <repo>`
+---
+
+## Auth (aka "login once, push forever-ish")
+
+you now have to **login** before you can push/pull/clone.
+
+### `login <remote-server-url> <username> <password>`
+
+logs you in and stores a token **inside your local repo** at:
+
+- `.svcs/remotes-token.json`
+
+example:
+
+```bash
+python3 svcs.py login http://127.0.0.1:5000 alice secret
+```
+
+notes:
+- tokens are stored *per server url + username*
+- if you delete `.svcs/remotes-token.json`, that's basically logging out (very advanced security technique)
+
+---
+
+## `remote add <name> <remote-server-url> <repo>`
 
 adds a remote to `.svcs/remotes.json`.
 
 ```bash
-python3 svcs.py remote add origin http://localhost:8000 my-repo
+python3 svcs.py remote add origin http://127.0.0.1:5000 my-repo
 ```
 
-### `push <remote> [twig]`
+---
 
-pushes commits + objects **and** (this is the chaotic part) a full **working tree snapshot** of your current files.
+## `push <remote> [twig] --user <username>`
 
-- default twig is whatever you're on
-- if the server returns `404`, svcs will try to auto-create the repo by calling `POST /create/<repo>` and then push again
+pushes commits + objects **and** a full **working tree snapshot** of your current files.
+
+because why send a clean diff when you can send *everything*.
 
 ```bash
-python3 svcs.py push origin
-python3 svcs.py push origin main
+python3 svcs.py push origin --user alice
+python3 svcs.py push origin main --user alice
 ```
 
-### `pull <remote>`
+what it does:
+- sends `.svcs` objects + commits + twigs
+- also sends a working tree snapshot so the server can serve it later for clone
 
-pulls **only the `.svcs` database** (objects/commits/twig heads). it does **not** rewrite your working directory.
+if you get:
+- `401 unauthorized`: you forgot to login or your token is invalid
+- `403 forbidden`: you're logged in as one user but trying to push as another
+- `404 repo not found`: svcs will auto-create it (if possible) and push again
+
+---
+
+## `pull <remote> --user <username>`
+
+pulls **only the `.svcs` database** (objects/commits/twig heads).
+it does **not** rewrite your working directory.
 
 aka: it updates your "history" but doesn't touch your "mess".
 
 ```bash
-python3 svcs.py pull origin
-```
-
-### `clone <remote-server-url> <repo> <folder>`
-
-makes a new folder, initializes svcs inside it, sets `origin`, pulls the `.svcs` data, then fetches a snapshot for the current head commit and writes it into the working tree.
-
-```bash
-python3 svcs.py clone http://localhost:5000 my-repo ./my-repo
+python3 svcs.py pull origin --user alice
 ```
 
 ---
+
+## `clone <remote-server-url> <repo> <folder> --user <username>`
+
+makes a new folder, initializes svcs inside it, sets `origin`, pulls the `.svcs` data,
+then fetches a snapshot for the current head commit and writes it into the working tree.
+
+```bash
+python3 svcs.py clone http://127.0.0.1:5000 my-repo ./my-repo --user alice
+```
+
+---
+
+## What endpoints does the client expect now?
+
+your server should provide:
+
+- `POST /login`
+- `POST /create/<user>/<repo>`
+- `POST /push/<user>/<repo>`
+- `GET  /pull/<user>/<repo>`
+- `GET  /snapshot/<user>/<repo>/<commit>`
+
+(yes, it’s a lot of slashes. yes, it’s still HTTP. no, we are not proud.)
 
 
 ## Notes / Limitations (aka "things i didn't implement")
