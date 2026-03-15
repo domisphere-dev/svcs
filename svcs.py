@@ -82,28 +82,61 @@ def load_ignore():
             for line in f:
                 line = line.strip()
                 if line and not line.startswith("#"):
+                    # Normalize patterns so "dist/" also matches when paths don't have "./"
+                    if line.startswith("./"):
+                        line = line[2:]
+                    line = line.replace("\\", "/")
                     patterns.append(line)
+
+    # Always ignore SVCS internals
     patterns.append(".svcs/")
     return patterns
 
 def is_ignored(path, patterns):
+    # Normalize path into the same form as patterns:
+    # - no leading "./"
+    # - forward slashes
+    path = path.replace("\\", "/")
+    if path.startswith("./"):
+        path = path[2:]
+
     for pattern in patterns:
+        pattern = pattern.replace("\\", "/")
+        if pattern.startswith("./"):
+            pattern = pattern[2:]
+
+        # If pattern endswith "/" treat it as a directory prefix ignore
         if pattern.endswith("/"):
-            if path.startswith(pattern):
+            # match "dist/" against "dist" and "dist/..."
+            prefix = pattern[:-1]
+            if path == prefix or path.startswith(pattern):
                 return True
+
+        # glob match for everything else
         if fnmatch.fnmatch(path, pattern):
             return True
+
     return False
 
 def get_all_files():
     patterns = load_ignore()
     files = []
     for root, dirs, filenames in os.walk("."):
-        if root.startswith(f"./{SVCS_DIR}"):
+        # Normalize root once so we can reliably skip .svcs
+        root_norm = root.replace("\\", "/")
+        if root_norm.startswith("./"):
+            root_norm = root_norm[2:]
+
+        if root_norm == SVCS_DIR or root_norm.startswith(f"{SVCS_DIR}/"):
             continue
+
         for name in filenames:
             path = os.path.join(root, name)
             path = os.path.relpath(path, ".")
+            path = path.replace("\\", "/")
+            if path.startswith("./"):
+                path = path[2:]
+
             if is_ignored(path, patterns):
                 continue
             files.append(path)
@@ -341,6 +374,45 @@ def info():
     )
 
 # ----------------
+# Auth/token helpers (client-side)
+# ----------------
+def _load_tokens_local():
+    # { "<server-url>": { "<username>": "<token>" } }
+    data = read_json(REMOTES_TOKEN_FILE)
+    if not isinstance(data, dict):
+        return {}
+    return data
+
+def _save_tokens_local(data):
+    ensure_repo()
+    write_json(REMOTES_TOKEN_FILE, data)
+
+def _get_token_for(server_url: str, username: str):
+    tokens = _load_tokens_local()
+    server_url = normalize_base_url(server_url)
+    per_server = tokens.get(server_url, {})
+    if not isinstance(per_server, dict):
+        return None
+    tok = per_server.get(username)
+    if not tok:
+        return None
+    return tok
+
+def _set_token_for(server_url: str, username: str, token: str):
+    tokens = _load_tokens_local()
+    server_url = normalize_base_url(server_url)
+    if server_url not in tokens or not isinstance(tokens.get(server_url), dict):
+        tokens[server_url] = {}
+    tokens[server_url][username] = token
+    _save_tokens_local(tokens)
+
+def _auth_headers(server_url: str, username: str):
+    tok = _get_token_for(server_url, username)
+    if not tok:
+        return {}
+    return {"Authorization": f"Bearer {tok}"}
+
+# ----------------
 # Remote commands
 # ----------------
 def remote_add(name, url, repo):
@@ -403,9 +475,35 @@ def _write_working_tree_snapshot(snapshot):
         with open(relpath, "wb") as f:
             f.write(data)
 
-def push(remote_name, twig_name=None, auto_create=True):
+def login(server_url, username, password):
+    """
+    Logs in once and stores token in .svcs/remotes-token.json (per repo).
+    """
     ensure_repo()
     ensure_requests()
+
+    server_url = normalize_base_url(server_url)
+    r = requests.post(
+        f"{server_url}/login",
+        json={"username": username, "password": password},
+    )
+    if r.status_code != 200:
+        die(f"login failed ({r.status_code}): {r.text}")
+
+    data = r.json()
+    token = data.get("token")
+    if not token:
+        die("login failed: server did not return token")
+
+    _set_token_for(server_url, username, token)
+    print(f"logged in as {username} to {server_url} (token saved in {REMOTES_TOKEN_FILE})")
+
+def push(remote_name, twig_name=None, auto_create=True, username=None):
+    ensure_repo()
+    ensure_requests()
+
+    if not username:
+        die("push requires --user <username> (so we know which per-user scope to use).", 2)
 
     remote = _get_remote(remote_name)
     twig_name = twig_name or current_twig()
@@ -424,30 +522,51 @@ def push(remote_name, twig_name=None, auto_create=True):
         "snapshot_commit": commit_id,
     }
 
-    r = requests.post(f"{remote['url']}/push/{remote['repo']}", json=payload)
+    headers = _auth_headers(remote["url"], username)
+    if not headers:
+        die(f"no token found for {remote['url']} as {username}. Run: svcs login {remote['url']} {username} <password>", 1)
+
+    url_push = f"{remote['url']}/push/{username}/{remote['repo']}"
+    r = requests.post(url_push, json=payload, headers=headers)
     if r.status_code == 200:
-        print(f"pushed {twig_name} -> {remote_name}/{remote['repo']} (including working tree)")
+        print(f"pushed {twig_name} -> {remote_name}/{username}/{remote['repo']} (including working tree)")
         return
 
+    if r.status_code == 401:
+        die("push failed: unauthorized (token missing/invalid). Try `svcs login ...` again.", 1)
+
+    if r.status_code == 403:
+        die("push failed: forbidden (token user does not match URL user)", 1)
+
     if r.status_code == 404 and auto_create:
-        c = requests.post(f"{remote['url']}/create/{remote['repo']}")
+        url_create = f"{remote['url']}/create/{username}/{remote['repo']}"
+        c = requests.post(url_create, headers=headers)
         if c.status_code not in (201, 400):
             die(f"push failed: remote create failed ({c.status_code}): {c.text}")
-        r2 = requests.post(f"{remote['url']}/push/{remote['repo']}", json=payload)
+
+        r2 = requests.post(url_push, json=payload, headers=headers)
         if r2.status_code == 200:
-            print(f"pushed {twig_name} -> {remote_name}/{remote['repo']} (after create, including working tree)")
+            print(f"pushed {twig_name} -> {remote_name}/{username}/{remote['repo']} (after create, including working tree)")
             return
         die(f"push failed after create ({r2.status_code}): {r2.text}")
 
     die(f"push failed ({r.status_code}): {r.text}")
 
-def pull(remote_name):
-    # Pull ONLY syncs the .svcs database portion.
+def pull(remote_name, username=None):
     ensure_repo()
     ensure_requests()
 
+    if not username:
+        die("pull requires --user <username> (per-user scope).", 2)
+
     remote = _get_remote(remote_name)
-    r = requests.get(f"{remote['url']}/pull/{remote['repo']}")
+    headers = _auth_headers(remote["url"], username)
+    if not headers:
+        die(f"no token found for {remote['url']} as {username}. Run: svcs login {remote['url']} {username} <password>", 1)
+
+    r = requests.get(f"{remote['url']}/pull/{username}/{remote['repo']}", headers=headers)
+    if r.status_code == 401:
+        die("pull failed: unauthorized (token missing/invalid). Try `svcs login ...` again.", 1)
     if r.status_code != 200:
         die(f"pull failed ({r.status_code}): {r.text}")
 
@@ -467,10 +586,13 @@ def pull(remote_name):
     for tg, head in data.get("twigs", {}).items():
         set_twig_head(tg, head)
 
-    print(f"pulled .svcs data from {remote_name}/{remote['repo']}")
+    print(f"pulled .svcs data from {remote_name}/{username}/{remote['repo']}")
 
-def clone(url, repo, folder, twig="main"):
+def clone(url, repo, folder, username=None, twig="main"):
     ensure_requests()
+    if not username:
+        die("clone requires --user <username> (per-user scope).", 2)
+
     if os.path.exists(folder):
         die(f"folder {folder} already exists")
 
@@ -479,7 +601,9 @@ def clone(url, repo, folder, twig="main"):
 
     init()
     remote_add("origin", url, repo)
-    pull("origin")
+
+    # pull needs auth; clone is happening inside the new repo so token must exist in this repo too
+    pull("origin", username=username)
 
     head_commit = twig_head(twig)
     if not head_commit:
@@ -487,7 +611,11 @@ def clone(url, repo, folder, twig="main"):
         return
 
     remote_cfg = _get_remote("origin")
-    r = requests.get(f"{remote_cfg['url']}/snapshot/{remote_cfg['repo']}/{head_commit}")
+    headers = _auth_headers(remote_cfg["url"], username)
+    if not headers:
+        die(f"no token found for {remote_cfg['url']} as {username}. Run: svcs login {remote_cfg['url']} {username} <password>", 1)
+
+    r = requests.get(f"{remote_cfg['url']}/snapshot/{username}/{remote_cfg['repo']}/{head_commit}", headers=headers)
     if r.status_code != 200:
         die(f"clone failed to fetch snapshot for commit {head_commit} ({r.status_code}): {r.text}")
 
@@ -512,11 +640,25 @@ def usage():
         "  info\n"
         "\nremote commands:\n"
         "  remote add <name> <remote-server-url> <repo>\n"
-        "  push <remote> [twig]\n"
-        "  pull <remote>\n"
-        "  clone <remote-server-url> <repo> <folder>\n"
+        "  push <remote> [twig] --user <username>\n"
+        "  pull <remote> --user <username>\n"
+        "  clone <remote-server-url> <repo> <folder> --user <username>\n"
         "  login <remote-server-url> <username> <password>\n"
     )
+
+def _pop_flag(args, flag):
+    """
+    Returns (value, remaining_args).
+    Supports: --flag value
+    """
+    if flag not in args:
+        return None, args
+    i = args.index(flag)
+    if i == len(args) - 1:
+        die(f"missing value after {flag}", 2)
+    val = args[i + 1]
+    remaining = args[:i] + args[i + 2 :]
+    return val, remaining
 
 def main():
     if len(sys.argv) < 2:
@@ -551,21 +693,24 @@ def main():
             die("usage: svcs remote add <name> <remote-server-url> <repo>", 2)
         remote_add(args[1], args[2], args[3])
     elif cmd == "push":
-        if len(args) < 1:
-            die("usage: svcs push <remote> [twig]", 2)
-        push(args[0], args[1] if len(args) > 1 else None)
+        username, args2 = _pop_flag(args, "--user")
+        if len(args2) < 1:
+            die("usage: svcs push <remote> [twig] --user <username>", 2)
+        push(args2[0], args2[1] if len(args2) > 1 else None, username=username)
     elif cmd == "pull":
-        if len(args) != 1:
-            die("usage: svcs pull <remote>", 2)
-        pull(args[0])
+        username, args2 = _pop_flag(args, "--user")
+        if len(args2) != 1:
+            die("usage: svcs pull <remote> --user <username>", 2)
+        pull(args2[0], username=username)
     elif cmd == "clone":
-        if len(args) != 3:
-            die("usage: svcs clone <remote-server-url> <repo> <folder>", 2)
-        clone(args[0], args[1], args[2])
+        username, args2 = _pop_flag(args, "--user")
+        if len(args2) != 3:
+            die("usage: svcs clone <remote-server-url> <repo> <folder> --user <username>", 2)
+        clone(args2[0], args2[1], args2[2], username=username)
     elif cmd == "login":
         if len(args) != 3:
             die("usage: svcs login <remote-server-url> <username> <password>")
-        print("Work in Progress! (i need to figure out how to actualy implement this in a \"secure\" way...)")
+        login(args[0], args[1], args[2])
     else:
         die("unknown command. Run `svcs` with no args to see usage.", 2)
 
